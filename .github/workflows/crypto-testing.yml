@@ -19,7 +19,7 @@ jobs:
 
       - name: Build Docker image
         run: |
-          bash build.sh
+          DOCKER=docker bash build.sh
 
       - name: Prepare output directory
         run: |
@@ -28,6 +28,7 @@ jobs:
       - name: Run Test 7
         run: |
           docker run --rm \
+            -e AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
             -v "$GITHUB_WORKSPACE/mvp:/fuzzing/tech/paper_fuzzing/liboqs/KEM/Decaps/c/mvp" \
             u18-fuzzing-crypto-image \
             bash -lc '
@@ -39,6 +40,11 @@ jobs:
                 --run_specific_alg_only ${{ inputs.algorithm }} \
                 --base_path mvp
             '
+
+      - name: Fix output permissions
+        if: always()
+        run: |
+          sudo chown -R "$USER":"$USER" mvp
 
       - name: Upload test results
         if: always()
