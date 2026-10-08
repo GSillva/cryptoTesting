@@ -1,4 +1,4 @@
-name: Cryptographic Testing without dock
+name: Cryptographic Testing without Docker
 
 on:
   workflow_dispatch:
@@ -33,10 +33,23 @@ jobs:
 
       - name: Verify tools
         run: |
+          echo "===== GCC ====="
           gcc --version
+
+          echo ""
+          echo "===== CMake ====="
           cmake --version
+
+          echo ""
+          echo "===== Python ====="
           python3 --version
-          afl-fuzz -V
+
+          echo ""
+          echo "===== AFL++ ====="
+          command -v afl-fuzz
+          afl-fuzz -h >/dev/null
+
+          echo "AFL++ available."
 
       - name: Build LibOQS
         run: |
@@ -44,20 +57,21 @@ jobs:
 
       - name: Prepare output directory
         run: |
-          mkdir -p mvp
+          mkdir -p "$GITHUB_WORKSPACE/mvp"
 
       - name: Run Test 7
         run: |
-          cd tech/paper_fuzzing/liboqs/KEM/Decaps/c
+          cd "$GITHUB_WORKSPACE/tech/paper_fuzzing/liboqs/KEM/Decaps/c"
 
           DIRNAME=cur_liboqs make clean all
 
           set +e
 
+          AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
           time python3 run_all.py \
             --mutator python \
             --run_specific_alg_only "${{ inputs.algorithm }}" \
-            --base_path mvp
+            --base_path "$GITHUB_WORKSPACE/mvp"
 
           STATUS=$?
 
@@ -69,22 +83,22 @@ jobs:
         if: always()
         run: |
           echo "===== ARQUIVOS GERADOS ====="
-          find mvp -maxdepth 5 -print | sort || true
+          find "$GITHUB_WORKSPACE/mvp" -maxdepth 5 -print | sort || true
 
           echo ""
           echo "===== stdout.txt ====="
-          cat "mvp/${{ inputs.algorithm }}/stdout.txt" || true
+          cat "$GITHUB_WORKSPACE/mvp/${{ inputs.algorithm }}/stdout.txt" || true
 
           echo ""
           echo "===== fuzzoutputs ====="
-          find "mvp/${{ inputs.algorithm }}/fuzzoutputs" \
+          find "$GITHUB_WORKSPACE/mvp/${{ inputs.algorithm }}/fuzzoutputs" \
             -maxdepth 3 \
             -print 2>/dev/null | sort || true
 
       - name: Package test results
         if: always()
         run: |
-          test -d mvp || mkdir -p mvp
+          mkdir -p "$GITHUB_WORKSPACE/mvp"
           zip -r crypto-testing-results.zip mvp/
 
       - name: Upload test results
