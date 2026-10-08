@@ -1,4 +1,4 @@
-name: Cryptographic Testing MVP
+name: Cryptographic Testing without dock
 
 on:
   workflow_dispatch:
