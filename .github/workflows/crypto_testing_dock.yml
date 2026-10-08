@@ -11,7 +11,7 @@ on:
 
 jobs:
   crypto-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository
@@ -25,19 +25,22 @@ jobs:
             cmake \
             libssl-dev \
             python3 \
-            python3-pip
+            python3-dev \
+            python3-pip \
+            tqdm \
+            afl++ \
+            zip
 
-      - name: Install Python dependency
+      - name: Verify tools
         run: |
-          python3 -m pip install --user tqdm
+          gcc --version
+          cmake --version
+          python3 --version
+          afl-fuzz -V
 
       - name: Build LibOQS
         run: |
           make cur_liboqs
-
-      - name: Build AFL++
-        run: |
-          make aflpp
 
       - name: Prepare output directory
         run: |
@@ -45,15 +48,15 @@ jobs:
 
       - name: Run Test 7
         run: |
-          set +e
-
           cd tech/paper_fuzzing/liboqs/KEM/Decaps/c
 
           DIRNAME=cur_liboqs make clean all
 
+          set +e
+
           time python3 run_all.py \
             --mutator python \
-            --run_specific_alg_only ${{ inputs.algorithm }} \
+            --run_specific_alg_only "${{ inputs.algorithm }}" \
             --base_path mvp
 
           STATUS=$?
@@ -81,6 +84,7 @@ jobs:
       - name: Package test results
         if: always()
         run: |
+          test -d mvp || mkdir -p mvp
           zip -r crypto-testing-results.zip mvp/
 
       - name: Upload test results
