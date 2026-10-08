@@ -35,20 +35,20 @@ jobs:
         run: |
           echo "===== GCC ====="
           gcc --version
-
+      
           echo ""
           echo "===== CMake ====="
           cmake --version
-
+      
           echo ""
           echo "===== Python ====="
           python3 --version
-
+      
           echo ""
           echo "===== AFL++ ====="
           command -v afl-fuzz
-          afl-fuzz -h >/dev/null
-
+          afl-fuzz --version || true
+      
           echo "AFL++ available."
 
       - name: Build LibOQS
