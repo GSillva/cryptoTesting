@@ -100,26 +100,81 @@ jobs:
             "$GITHUB_WORKSPACE/aflpp/afl-clang" \
             "$GITHUB_WORKSPACE/aflpp/afl-fuzz"
 
-      - name: Run Test 7
+            - name: Debug AFL++ Test 7
         run: |
           cd "$GITHUB_WORKSPACE/tech/paper_fuzzing/liboqs/KEM/Decaps/c"
 
+          echo "===== Working directory ====="
+          pwd
+
+          echo ""
+          echo "===== DESIRED ALGORITHM ====="
+          echo "${{ inputs.algorithm }}"
+
+          echo ""
+          echo "===== AFL++ binaries ====="
+          ls -l "$GITHUB_WORKSPACE/aflpp/afl-clang-fast"
+          ls -l "$GITHUB_WORKSPACE/aflpp/afl-fuzz"
+
+          echo ""
+          echo "===== Build harness ====="
           DIRNAME=cur_liboqs make clean all
+
+          echo ""
+          echo "===== Prepare algorithm ====="
+
+          export DESIRED_ALG_TO_FUZZ="${{ inputs.algorithm }}"
+          export PYTHONPATH="$PWD"
+
+          export AFL_PYTHON_MODULE=Maul
+          export AFL_CUSTOM_MUTATOR_ONLY=1
+          export AFL_SKIP_CPUFREQ=1
+          export AFL_DISABLE_TRIM=1
+          export AFL_EXIT_WHEN_DONE=1
+          export AFL_EXIT_ON_TIME=1
+          export AFL_DEBUG_CHILD=1
+          export AFL_NO_UI=1
+          export AFL_INPUT_LEN_MAX=100000000
+          export AFL_TESTCACHE_SIZE=200
+          export AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
+
+          echo "DESIRED_ALG_TO_FUZZ=$DESIRED_ALG_TO_FUZZ"
+          echo "PYTHONPATH=$PYTHONPATH"
+          echo "AFL_PYTHON_MODULE=$AFL_PYTHON_MODULE"
+
+          echo ""
+          echo "===== Removing previous AFL output ====="
+
+          rm -rf fuzzinputs
+          rm -rf fuzzoutputs
+          mkdir -p fuzzinputs
+
+          echo ""
+          echo "===== Running make run_python directly ====="
 
           set +e
 
-          AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
-          time python3 run_all.py \
-            --mutator python \
-            --run_specific_alg_only "${{ inputs.algorithm }}" \
-            --base_path "$GITHUB_WORKSPACE/mvp"
+          make run_python 2>&1 | tee "$GITHUB_WORKSPACE/afl-direct.log"
 
-          STATUS=$?
+          STATUS=${PIPESTATUS[0]}
 
           echo ""
-          echo "Test 7 exit code: $STATUS"
+          echo "===== make run_python exit code ====="
+          echo "$STATUS"
 
-          exit $STATUS
+          echo ""
+          echo "===== Directory tree after AFL++ ====="
+          find fuzzoutputs -maxdepth 4 -print 2>/dev/null | sort || true
+
+          echo ""
+          echo "===== fuzzinputs ====="
+          find fuzzinputs -maxdepth 3 -print 2>/dev/null | sort || true
+
+          echo ""
+          echo "===== AFL direct log ====="
+          cat "$GITHUB_WORKSPACE/afl-direct.log" || true
+
+          exit 0
 
       - name: Inspect Test 7 output
         if: always()
