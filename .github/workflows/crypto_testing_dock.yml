@@ -29,6 +29,7 @@ jobs:
             python3-pip \
             python3-tqdm \
             afl++ \
+            which \
             zip
 
       - name: Verify tools
@@ -49,6 +50,7 @@ jobs:
           command -v afl-fuzz
           afl-fuzz --version || true
 
+          echo ""
           echo "AFL++ available."
 
       - name: Check AFL++ compilers
@@ -65,6 +67,19 @@ jobs:
           echo ""
           echo "===== afl-cc version ====="
           afl-cc --version || true
+
+      - name: Check AFL++ detection
+        run: |
+          echo "===== which ====="
+          which afl-cc
+          which afl-gcc
+          which afl-fuzz
+
+          echo ""
+          echo "===== command -v ====="
+          command -v afl-cc
+          command -v afl-gcc
+          command -v afl-fuzz
 
       - name: Build LibOQS
         run: |
