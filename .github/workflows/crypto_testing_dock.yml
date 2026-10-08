@@ -68,18 +68,11 @@ jobs:
           echo "===== afl-cc version ====="
           afl-cc --version || true
 
-      - name: Check AFL++ detection
-        run: |
-          echo "===== which ====="
-          which afl-cc
-          which afl-gcc
-          which afl-fuzz
-
           echo ""
-          echo "===== command -v ====="
-          command -v afl-cc
-          command -v afl-gcc
-          command -v afl-fuzz
+          echo "===== which ====="
+          which afl-cc || true
+          which afl-gcc || true
+          which afl-fuzz || true
 
       - name: Build LibOQS
         run: |
@@ -89,14 +82,46 @@ jobs:
         run: |
           mkdir -p "$GITHUB_WORKSPACE/mvp"
 
+      - name: Inspect Test 7 Makefile
+        run: |
+          cd "$GITHUB_WORKSPACE/tech/paper_fuzzing/liboqs/KEM/Decaps/c"
+
+          echo "===== MAKEFILE: primeiras 30 linhas ====="
+          nl -ba Makefile | head -30
+
+          echo ""
+          echo "===== LINHAS RELACIONADAS A AFL ====="
+          grep -niE 'afl|AFL|CC|CXX|PATH' Makefile || true
+
+          echo ""
+          echo "===== AMBIENTE AFL ====="
+          env | sort | grep -E '^(AFL|CC|CXX|PATH)' || true
+
+          echo ""
+          echo "===== EXECUTÁVEIS AFL++ ====="
+          type -a afl-cc || true
+          type -a afl-gcc || true
+          type -a afl-gcc-fast || true
+          type -a afl-clang-fast || true
+
+          echo ""
+          echo "===== TESTE DIRETO DO AFL-CC ====="
+          which afl-cc
+          test -x "$(which afl-cc)" && echo "afl-cc is executable"
+
+          echo ""
+          echo "===== AFLCC ====="
+          echo "AFLCC=${AFLCC:-<not set>}"
+
+          echo ""
+          echo "===== AFLGCC ====="
+          echo "AFLGCC=${AFLGCC:-<not set>}"
+
       - name: Run Test 7
         run: |
           cd "$GITHUB_WORKSPACE/tech/paper_fuzzing/liboqs/KEM/Decaps/c"
 
-          AFLCC=afl-cc \
-          AFLGCC=afl-gcc \
-          DIRNAME=cur_liboqs \
-          make clean all
+          DIRNAME=cur_liboqs make clean all
 
           set +e
 
