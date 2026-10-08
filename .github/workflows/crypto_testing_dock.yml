@@ -100,7 +100,7 @@ jobs:
             "$GITHUB_WORKSPACE/aflpp/afl-clang" \
             "$GITHUB_WORKSPACE/aflpp/afl-fuzz"
 
-            - name: Debug AFL++ Test 7
+      - name: Debug AFL++ Test 7
         run: |
           cd "$GITHUB_WORKSPACE/tech/paper_fuzzing/liboqs/KEM/Decaps/c"
 
