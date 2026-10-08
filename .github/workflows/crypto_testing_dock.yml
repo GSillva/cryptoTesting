@@ -47,32 +47,36 @@ jobs:
 
           echo ""
           echo "===== AFL++ ====="
+          command -v afl-cc
+          command -v afl-clang-fast
+          command -v afl-clang
           command -v afl-fuzz
+
+          echo ""
+          echo "===== AFL++ version ====="
           afl-fuzz --version || true
 
-          echo ""
-          echo "AFL++ available."
-
-      - name: Check AFL++ compilers
+      - name: Prepare AFL++ compatibility directory
         run: |
-          echo "===== AFL++ executables ====="
+          mkdir -p "$GITHUB_WORKSPACE/aflpp"
 
-          command -v afl-cc || true
-          command -v afl-c++ || true
-          command -v afl-gcc || true
-          command -v afl-gcc-fast || true
-          command -v afl-clang || true
-          command -v afl-clang-fast || true
+          ln -sf "$(command -v afl-clang-fast)" \
+            "$GITHUB_WORKSPACE/aflpp/afl-clang-fast"
+
+          ln -sf "$(command -v afl-clang)" \
+            "$GITHUB_WORKSPACE/aflpp/afl-clang"
+
+          ln -sf "$(command -v afl-fuzz)" \
+            "$GITHUB_WORKSPACE/aflpp/afl-fuzz"
+
+          echo "===== AFL++ compatibility directory ====="
+          ls -lah "$GITHUB_WORKSPACE/aflpp"
 
           echo ""
-          echo "===== afl-cc version ====="
-          afl-cc --version || true
-
-          echo ""
-          echo "===== which ====="
-          which afl-cc || true
-          which afl-gcc || true
-          which afl-fuzz || true
+          echo "===== Resolved links ====="
+          readlink -f "$GITHUB_WORKSPACE/aflpp/afl-clang-fast"
+          readlink -f "$GITHUB_WORKSPACE/aflpp/afl-clang"
+          readlink -f "$GITHUB_WORKSPACE/aflpp/afl-fuzz"
 
       - name: Build LibOQS
         run: |
@@ -82,40 +86,19 @@ jobs:
         run: |
           mkdir -p "$GITHUB_WORKSPACE/mvp"
 
-      - name: Inspect Test 7 Makefile
+      - name: Inspect AFL++ paths expected by Makefile
         run: |
           cd "$GITHUB_WORKSPACE/tech/paper_fuzzing/liboqs/KEM/Decaps/c"
 
-          echo "===== MAKEFILE: primeiras 30 linhas ====="
-          nl -ba Makefile | head -30
+          echo "===== ROOTDIR ====="
+          echo "../../../../../../"
 
           echo ""
-          echo "===== LINHAS RELACIONADAS A AFL ====="
-          grep -niE 'afl|AFL|CC|CXX|PATH' Makefile || true
-
-          echo ""
-          echo "===== AMBIENTE AFL ====="
-          env | sort | grep -E '^(AFL|CC|CXX|PATH)' || true
-
-          echo ""
-          echo "===== EXECUTÁVEIS AFL++ ====="
-          type -a afl-cc || true
-          type -a afl-gcc || true
-          type -a afl-gcc-fast || true
-          type -a afl-clang-fast || true
-
-          echo ""
-          echo "===== TESTE DIRETO DO AFL-CC ====="
-          which afl-cc
-          test -x "$(which afl-cc)" && echo "afl-cc is executable"
-
-          echo ""
-          echo "===== AFLCC ====="
-          echo "AFLCC=${AFLCC:-<not set>}"
-
-          echo ""
-          echo "===== AFLGCC ====="
-          echo "AFLGCC=${AFLGCC:-<not set>}"
+          echo "===== AFL++ files expected by Makefile ====="
+          ls -l \
+            "$GITHUB_WORKSPACE/aflpp/afl-clang-fast" \
+            "$GITHUB_WORKSPACE/aflpp/afl-clang" \
+            "$GITHUB_WORKSPACE/aflpp/afl-fuzz"
 
       - name: Run Test 7
         run: |
@@ -133,6 +116,7 @@ jobs:
 
           STATUS=$?
 
+          echo ""
           echo "Test 7 exit code: $STATUS"
 
           exit $STATUS
