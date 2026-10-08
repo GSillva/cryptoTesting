@@ -35,21 +35,36 @@ jobs:
         run: |
           echo "===== GCC ====="
           gcc --version
-      
+
           echo ""
           echo "===== CMake ====="
           cmake --version
-      
+
           echo ""
           echo "===== Python ====="
           python3 --version
-      
+
           echo ""
           echo "===== AFL++ ====="
           command -v afl-fuzz
           afl-fuzz --version || true
-      
+
           echo "AFL++ available."
+
+      - name: Check AFL++ compilers
+        run: |
+          echo "===== AFL++ executables ====="
+
+          command -v afl-cc || true
+          command -v afl-c++ || true
+          command -v afl-gcc || true
+          command -v afl-gcc-fast || true
+          command -v afl-clang || true
+          command -v afl-clang-fast || true
+
+          echo ""
+          echo "===== afl-cc version ====="
+          afl-cc --version || true
 
       - name: Build LibOQS
         run: |
@@ -63,7 +78,10 @@ jobs:
         run: |
           cd "$GITHUB_WORKSPACE/tech/paper_fuzzing/liboqs/KEM/Decaps/c"
 
-          DIRNAME=cur_liboqs make clean all
+          AFLCC=afl-cc \
+          AFLGCC=afl-gcc \
+          DIRNAME=cur_liboqs \
+          make clean all
 
           set +e
 
@@ -83,14 +101,19 @@ jobs:
         if: always()
         run: |
           echo "===== ARQUIVOS GERADOS ====="
-          find "$GITHUB_WORKSPACE/mvp" -maxdepth 5 -print | sort || true
+
+          find "$GITHUB_WORKSPACE/mvp" \
+            -maxdepth 5 \
+            -print | sort || true
 
           echo ""
           echo "===== stdout.txt ====="
+
           cat "$GITHUB_WORKSPACE/mvp/${{ inputs.algorithm }}/stdout.txt" || true
 
           echo ""
           echo "===== fuzzoutputs ====="
+
           find "$GITHUB_WORKSPACE/mvp/${{ inputs.algorithm }}/fuzzoutputs" \
             -maxdepth 3 \
             -print 2>/dev/null | sort || true
@@ -99,6 +122,7 @@ jobs:
         if: always()
         run: |
           mkdir -p "$GITHUB_WORKSPACE/mvp"
+
           zip -r crypto-testing-results.zip mvp/
 
       - name: Upload test results
