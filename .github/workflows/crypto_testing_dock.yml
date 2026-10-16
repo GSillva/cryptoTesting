@@ -41,13 +41,16 @@ jobs:
             python3-bitarray \
             python3-cffi \
             python3-dev \
-            python3-pip
+            python3-pip \
+            python3-sympy
 
           python3 - <<'PY'
           import cffi
           import bitarray
+          import sympy
           print("cffi:", cffi.__version__)
           print("bitarray:", bitarray.__version__)
+          print("sympy:", sympy.__version__)
           PY
 
       - name: Prepare AFL++ compatibility paths
@@ -91,7 +94,7 @@ jobs:
             echo "runner_os=$(uname -srm)"
             echo "python=$(python3 --version 2>&1)"
             echo "afl_version=$(afl-fuzz -h 2>&1 | head -n 1 || true)"
-            python3 -c 'import cffi, bitarray; print("cffi=" + cffi.__version__); print("bitarray=" + bitarray.__version__)'
+            python3 -c 'import cffi, bitarray, sympy; print("cffi=" + cffi.__version__); print("bitarray=" + bitarray.__version__); print("sympy=" + sympy.__version__)'
           } > mvp/environment.txt
 
       - name: Build LibOQS 0.8.0
