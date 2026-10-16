@@ -161,14 +161,16 @@ jobs:
             TRIAL_DIR="$RESULT_DIR/trial_$trial"
             mkdir -p "$TRIAL_DIR"
 
-            # Cada repetição começa sem os resultados anteriores.
             rm -rf fuzzinputs fuzzoutputs crashes
             mkdir -p fuzzinputs
 
             start_ms=$(date +%s%3N)
 
             set +e
-            make run_python 2>&1 | tee "$TRIAL_DIR/run.log"
+            make run_python \
+              'FUZZCMD=$(AFLFUZZ) -i $(FUZZINPUTS)/ -o $(FUZZOUTPUTS) -- $(BINDIR)/Match.afl.out @@' \
+              2>&1 | tee "$TRIAL_DIR/run.log"
+
             status=${PIPESTATUS[0]}
             set -e
 
@@ -182,7 +184,6 @@ jobs:
             echo "Trial $trial duration: ${duration_ms} ms"
             echo "Trial $trial exit code: $status"
 
-            # Preserve inputs and outputs for later inspection.
             if [ -d fuzzinputs ]; then
               cp -a fuzzinputs "$TRIAL_DIR/"
             fi
@@ -195,8 +196,6 @@ jobs:
               cp -a crashes "$TRIAL_DIR/"
             fi
 
-            # Preserve the failure and stop instead of treating
-            # an unsuccessful run as a valid measurement.
             if [ "$status" -ne 0 ]; then
               echo "Trial failed. Stopping the baseline repetitions."
               exit "$status"
