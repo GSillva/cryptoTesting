@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - github-actions-mvp
+      - master
     paths:
       - ".github/workflows/crypto_testing_dock.yml"
       - "Makefile"
@@ -69,6 +69,11 @@ jobs:
             exit 1
           fi
 
+          if ! command -v afl-fuzz >/dev/null 2>&1; then
+            echo "::error::afl-fuzz was not found in PATH."
+            exit 1
+          fi
+
           AFL_FUZZ="$(command -v afl-fuzz)"
           mkdir -p aflpp
           ln -sfn "$AFL_CC" aflpp/afl-clang-fast
@@ -84,7 +89,7 @@ jobs:
           set -Eeuo pipefail
           mkdir -p mvp/trials
 
-          printf 'trial,started_at_utc,elapsed_seconds,make_exit_code,run_time,execs_done,execs_per_sec,cycles_done,paths_total,saved_crashes,saved_hangs\n' \
+          printf 'trial,started_at_utc,wall_elapsed_seconds,make_exit_code,mutator_loaded,completion_marker,last_debug_progress,total_bit_positions,afl_reported_seconds,stats_snapshot_execs_done,saved_crashes,saved_hangs\n' \
             > mvp/timings.csv
 
           {
@@ -93,8 +98,15 @@ jobs:
             echo "branch=${GITHUB_REF_NAME:-unknown}"
             echo "runner_os=$(uname -srm)"
             echo "python=$(python3 --version 2>&1)"
+            echo "clang=$(clang --version 2>&1 | head -n 1)"
             echo "afl_version=$(afl-fuzz -h 2>&1 | head -n 1 || true)"
-            python3 -c 'import cffi, bitarray, sympy; print("cffi=" + cffi.__version__); print("bitarray=" + bitarray.__version__); print("sympy=" + sympy.__version__)'
+            echo "completion_model=Maul.py intentionally signals SIGINT then SIGKILL after its finite mutation sequence; workflow validates the completion log marker instead of treating fuzzer_stats as final."
+            echo "core_pattern_compat=AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1"
+            echo "python_cffi=$(python3 -c 'import cffi; print(cffi.__version__)')"
+            echo "python_bitarray=$(python3 -c 'import bitarray; print(bitarray.__version__)')"
+            echo "python_sympy=$(python3 -c 'import sympy; print(sympy.__version__)')"
+            echo "--- CPU ---"
+            lscpu | grep -E '^(Architecture|CPU\(s\)|Model name):' || true
           } > mvp/environment.txt
 
       - name: Build LibOQS 0.8.0
@@ -128,9 +140,7 @@ jobs:
           read_stat() {
             local key="$1"
             local file="$2"
-
             [[ -s "$file" ]] || { printf 'NA'; return; }
-
             awk -F ':' -v wanted="$key" '
               {
                 name = $1
@@ -157,70 +167,111 @@ jobs:
 
             started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             start_ns="$(date +%s%N)"
-
-            echo "Starting Test 7 trial ${trial}/3"
+            echo "Starting Test 7 trial ${trial}/3 at ${started_at}"
 
             set +e
             (
               cd "$HARNESS_DIR"
-
               export DESIRED_ALG_TO_FUZZ=17
-              export PYTHONPATH="$GITHUB_WORKSPACE"
               export AFL_PYTHON_MODULE=Maul
               export AFL_CUSTOM_MUTATOR_ONLY=1
               export AFL_SKIP_CPUFREQ=1
               export AFL_DISABLE_TRIM=1
               export AFL_NO_UI=1
-              export AFL_DEBUG_CHILD=1
               export AFL_INPUT_LEN_MAX=100000000
               export AFL_TESTCACHE_SIZE=200
 
+              # Maul.py ends its finite mutation sequence by signalling AFL++.
+              # Accept this only when the explicit completion marker is logged.
               make run_python \
+                DESIRED_ALG_TO_FUZZ=17 \
+                GITIMEOUT=10 \
                 'FUZZCMD=env -u AFL_EXIT_WHEN_DONE -u AFL_EXIT_ON_TIME AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 $(AFLFUZZ) -i $(FUZZINPUTS)/ -o $(FUZZOUTPUTS) -V 30 -- $(BINDIR)/Match.afl.out @@'
             ) 2>&1 | tee "$TRIAL_DIR/run.log"
-
             make_status=${PIPESTATUS[0]}
             set -e
 
             end_ns="$(date +%s%N)"
-            elapsed_seconds="$(awk -v s="$start_ns" -v e="$end_ns" 'BEGIN { printf "%.3f", (e-s)/1000000000 }')"
+            wall_elapsed_seconds="$(awk -v start="$start_ns" -v end="$end_ns" 'BEGIN { printf "%.3f", (end-start)/1000000000 }')"
 
-            stats_file="$HARNESS_DIR/fuzzoutputs/default/fuzzer_stats"
+            mutator_loaded="NO"
+            completion_marker="NO"
+            last_debug_progress="NA"
+            total_bit_positions="NA"
+            afl_reported_seconds="NA"
 
-            if [[ -s "$stats_file" ]]; then
-              cp "$stats_file" "$TRIAL_DIR/fuzzer_stats"
+            if grep -Fq "Python mutator 'Maul' installed successfully." "$TRIAL_DIR/run.log"; then
+              mutator_loaded="YES"
             fi
 
-            run_time="$(read_stat run_time "$stats_file")"
-            execs_done="$(read_stat execs_done "$stats_file")"
-            execs_per_sec="$(read_stat execs_per_sec "$stats_file")"
-            cycles_done="$(read_stat cycles_done "$stats_file")"
-            paths_total="$(read_stat paths_total "$stats_file")"
-            saved_crashes="$(read_stat saved_crashes "$stats_file")"
-            saved_hangs="$(read_stat saved_hangs "$stats_file")"
+            if grep -Fq "DEBUG: Terminating fuzzing loop." "$TRIAL_DIR/run.log"; then
+              completion_marker="YES"
+            fi
 
-            printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
-              "$trial" "$started_at" "$elapsed_seconds" "$make_status" \
-              "$run_time" "$execs_done" "$execs_per_sec" "$cycles_done" \
-              "$paths_total" "$saved_crashes" "$saved_hangs" \
+            progress_line="$(grep -E 'DEBUG: [0-9]+ / [0-9]+' "$TRIAL_DIR/run.log" | tail -n 1 || true)"
+            if [[ -n "$progress_line" ]]; then
+              progress_done="$(sed -E 's/.*DEBUG: ([0-9]+) \/ ([0-9]+).*/\1/' <<< "$progress_line")"
+              total_bit_positions="$(sed -E 's/.*DEBUG: ([0-9]+) \/ ([0-9]+).*/\2/' <<< "$progress_line")"
+              last_debug_progress="${progress_done}/${total_bit_positions}"
+            fi
+
+            afl_runtime_line="$(grep -Eo 'run_time=0:00:00:[0-9]+' "$TRIAL_DIR/run.log" | tail -n 1 || true)"
+            if [[ -n "$afl_runtime_line" ]]; then
+              afl_reported_seconds="${afl_runtime_line##*:}"
+            fi
+
+            stats_file="$HARNESS_DIR/fuzzoutputs/default/fuzzer_stats"
+            stats_snapshot_execs_done="NA"
+            saved_crashes="NA"
+            saved_hangs="NA"
+
+            if [[ -s "$stats_file" ]]; then
+              # This can be a startup snapshot because SIGKILL prevents a final stats flush.
+              cp "$stats_file" "$TRIAL_DIR/fuzzer_stats_snapshot.txt"
+              stats_snapshot_execs_done="$(read_stat execs_done "$stats_file")"
+              saved_crashes="$(read_stat saved_crashes "$stats_file")"
+              saved_hangs="$(read_stat saved_hangs "$stats_file")"
+            fi
+
+            printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+              "$trial" "$started_at" "$wall_elapsed_seconds" "$make_status" \
+              "$mutator_loaded" "$completion_marker" "$last_debug_progress" \
+              "$total_bit_positions" "$afl_reported_seconds" \
+              "$stats_snapshot_execs_done" "$saved_crashes" "$saved_hangs" \
               >> "$GITHUB_WORKSPACE/mvp/timings.csv"
 
-            if [[ ! -s "$stats_file" ]]; then
-              echo "::error::Trial ${trial} did not produce fuzzer_stats."
+            if [[ "$mutator_loaded" != "YES" ]]; then
+              echo "::error::Trial ${trial}: AFL++ did not confirm that the Maul mutator loaded."
               exit 1
             fi
 
-            if ! [[ "$execs_done" =~ ^[0-9]+$ ]] || (( execs_done < 1 )); then
-              echo "::error::Trial ${trial} recorded no completed executions."
+            if [[ "$completion_marker" != "YES" ]]; then
+              echo "::error::Trial ${trial}: expected Maul completion marker was not found; normal termination is not confirmed."
+              exit 1
+            fi
+
+            if [[ "$total_bit_positions" != "8720" ]]; then
+              echo "::error::Trial ${trial}: expected the Kyber768 Test 7 progress total 8720, got ${total_bit_positions}."
+              exit 1
+            fi
+
+            if [[ ! "$last_debug_progress" =~ ^[0-9]+/[0-9]+$ ]]; then
+              echo "::error::Trial ${trial}: no mutation progress line was captured."
+              exit 1
+            fi
+
+            progress_done="${last_debug_progress%%/*}"
+            if (( progress_done + 1000 < total_bit_positions )); then
+              echo "::error::Trial ${trial}: progress log stopped too far before the expected total."
               exit 1
             fi
 
             if (( make_status != 0 )); then
-              echo "::error::make run_python failed in trial ${trial}."
+              echo "::error::Trial ${trial}: make run_python returned ${make_status}, despite the completion marker."
               exit 1
             fi
 
-            echo "Trial ${trial}: ${elapsed_seconds}s, executions=${execs_done}, execs/sec=${execs_per_sec}"
+            echo "Trial ${trial} completed the Maul mutation sequence: wall=${wall_elapsed_seconds}s, progress=${last_debug_progress}, AFL-reported seconds=${afl_reported_seconds}."
           done
 
       - name: Summarize baseline measurements
@@ -229,12 +280,14 @@ jobs:
         run: |
           if [[ -f mvp/timings.csv ]]; then
             {
-              echo "### Test 7 baseline"
+              echo "### Test 7 baseline timings"
+              echo
+              echo "A trial is accepted when the Maul mutator loads and emits its expected completion marker. Maul.py intentionally terminates AFL++ after the finite mutation sequence, so the final fuzzer_stats flush may not occur; fuzzer_stats is kept as a diagnostic snapshot, not used as the completion criterion."
+              echo
               echo '```csv'
               cat mvp/timings.csv
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
-
             cat mvp/timings.csv
           else
             echo "No timing CSV was created." | tee -a "$GITHUB_STEP_SUMMARY"
