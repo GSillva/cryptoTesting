@@ -24,7 +24,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install AFL++ and Python mutator dependencies
+      - name: Install dependencies
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -33,6 +33,7 @@ jobs:
             afl++ \
             build-essential \
             clang \
+            cmake \
             git \
             libssl-dev \
             ninja-build \
@@ -45,8 +46,8 @@ jobs:
           python3 - <<'PY'
           import cffi
           import bitarray
-          print(f"cffi: {cffi.__version__}")
-          print(f"bitarray: {bitarray.__version__}")
+          print("cffi:", cffi.__version__)
+          print("bitarray:", bitarray.__version__)
           PY
 
       - name: Prepare AFL++ compatibility paths
@@ -54,40 +55,34 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          AFL_CC=""
           if command -v afl-clang-fast >/dev/null 2>&1; then
             AFL_CC="$(command -v afl-clang-fast)"
           elif command -v afl-clang >/dev/null 2>&1; then
             AFL_CC="$(command -v afl-clang)"
           elif command -v afl-cc >/dev/null 2>&1; then
             AFL_CC="$(command -v afl-cc)"
-          fi
-
-          AFL_FUZZ="$(command -v afl-fuzz || true)"
-
-          if [[ -z "$AFL_CC" ]]; then
-            echo "::error::No AFL++ compiler wrapper found (afl-clang-fast, afl-clang or afl-cc)."
-            exit 1
-          fi
-          if [[ -z "$AFL_FUZZ" ]]; then
-            echo "::error::afl-fuzz was not found in PATH."
+          else
+            echo "::error::No AFL++ compiler wrapper found."
             exit 1
           fi
 
+          AFL_FUZZ="$(command -v afl-fuzz)"
           mkdir -p aflpp
           ln -sfn "$AFL_CC" aflpp/afl-clang-fast
+          ln -sfn "$AFL_CC" aflpp/afl-clang
           ln -sfn "$AFL_FUZZ" aflpp/afl-fuzz
 
-          echo "AFL compiler wrapper: $AFL_CC"
+          echo "AFL compiler: $AFL_CC"
           echo "AFL fuzzer: $AFL_FUZZ"
-          afl-fuzz -h 2>&1 | head -n 3 || true
 
       - name: Initialize baseline records
         shell: bash
         run: |
           set -Eeuo pipefail
           mkdir -p mvp/trials
-          printf 'trial,started_at_utc,elapsed_seconds,make_exit_code,run_time,execs_done,execs_per_sec,cycles_done,paths_total,saved_crashes,saved_hangs\n' > mvp/timings.csv
+
+          printf 'trial,started_at_utc,elapsed_seconds,make_exit_code,run_time,execs_done,execs_per_sec,cycles_done,paths_total,saved_crashes,saved_hangs\n' \
+            > mvp/timings.csv
 
           {
             echo "timestamp_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -95,10 +90,7 @@ jobs:
             echo "branch=${GITHUB_REF_NAME:-unknown}"
             echo "runner_os=$(uname -srm)"
             echo "python=$(python3 --version 2>&1)"
-            echo "clang=$(clang --version 2>&1 | head -n 1)"
-            echo "--- CPU ---"
-            lscpu | grep -E '^(Architecture|CPU\(s\)|Model name):' || true
-            echo "--- Python mutator dependencies ---"
+            echo "afl_version=$(afl-fuzz -h 2>&1 | head -n 1 || true)"
             python3 -c 'import cffi, bitarray; print("cffi=" + cffi.__version__); print("bitarray=" + bitarray.__version__)'
           } > mvp/environment.txt
 
@@ -107,10 +99,13 @@ jobs:
         run: |
           set -Eeuo pipefail
           make cur_liboqs
+
           {
             echo "liboqs_directory=cur_liboqs"
-            echo "liboqs_commit=$(git -C cur_liboqs rev-parse HEAD)"
-            echo "liboqs_description=$(git -C cur_liboqs describe --tags --always --dirty)"
+            if [[ -d cur_liboqs/.git ]]; then
+              echo "liboqs_commit=$(git -C cur_liboqs rev-parse HEAD)"
+              echo "liboqs_description=$(git -C cur_liboqs describe --tags --always --dirty)"
+            fi
           } >> mvp/environment.txt
 
       - name: Build Test 7 harness
@@ -130,10 +125,9 @@ jobs:
           read_stat() {
             local key="$1"
             local file="$2"
-            if [[ ! -s "$file" ]]; then
-              printf 'NA'
-              return
-            fi
+
+            [[ -s "$file" ]] || { printf 'NA'; return; }
+
             awk -F ':' -v wanted="$key" '
               {
                 name = $1
@@ -154,30 +148,40 @@ jobs:
             TRIAL_DIR="$GITHUB_WORKSPACE/mvp/trials/trial_${trial}"
             mkdir -p "$TRIAL_DIR"
 
-            # Cada tentativa começa sem corpus ou estatísticas da anterior.
             rm -rf "$HARNESS_DIR/fuzzinputs" \
                    "$HARNESS_DIR/fuzzoutputs" \
                    "$HARNESS_DIR/crashes"
 
             started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             start_ns="$(date +%s%N)"
-            echo "Starting Test 7 trial ${trial}/3 at ${started_at}"
+
+            echo "Starting Test 7 trial ${trial}/3"
 
             set +e
             (
               cd "$HARNESS_DIR"
+
+              export DESIRED_ALG_TO_FUZZ=17
+              export PYTHONPATH="$GITHUB_WORKSPACE"
+              export AFL_PYTHON_MODULE=Maul
+              export AFL_CUSTOM_MUTATOR_ONLY=1
+              export AFL_SKIP_CPUFREQ=1
+              export AFL_DISABLE_TRIM=1
+              export AFL_NO_UI=1
+              export AFL_DEBUG_CHILD=1
+              export AFL_INPUT_LEN_MAX=100000000
+              export AFL_TESTCACHE_SIZE=200
+
               make run_python \
-                DESIRED_ALG_TO_FUZZ=17 \
-                GITIMEOUT=10 \
-                AFL_DEBUG_CHILD=1 \
-                AFL_NO_UI=1 \
-                'FUZZCMD=env -u AFL_EXIT_WHEN_DONE -u AFL_EXIT_ON_TIME $(AFLFUZZ) -i $(FUZZINPUTS)/ -o $(FUZZOUTPUTS) -V 30 -- $(BINDIR)/Match.afl.out @@'
+                'FUZZCMD=env -u AFL_EXIT_WHEN_DONE -u AFL_EXIT_ON_TIME AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 $(AFLFUZZ) -i $(FUZZINPUTS)/ -o $(FUZZOUTPUTS) -V 30 -- $(BINDIR)/Match.afl.out @@'
             ) 2>&1 | tee "$TRIAL_DIR/run.log"
+
             make_status=${PIPESTATUS[0]}
             set -e
 
             end_ns="$(date +%s%N)"
-            elapsed_seconds="$(awk -v start="$start_ns" -v end="$end_ns" 'BEGIN { printf "%.3f", (end - start) / 1000000000 }')"
+            elapsed_seconds="$(awk -v s="$start_ns" -v e="$end_ns" 'BEGIN { printf "%.3f", (e-s)/1000000000 }')"
+
             stats_file="$HARNESS_DIR/fuzzoutputs/default/fuzzer_stats"
 
             if [[ -s "$stats_file" ]]; then
@@ -199,21 +203,21 @@ jobs:
               >> "$GITHUB_WORKSPACE/mvp/timings.csv"
 
             if [[ ! -s "$stats_file" ]]; then
-              echo "::error::Trial ${trial} did not produce fuzzer_stats; AFL++ may have failed to start."
+              echo "::error::Trial ${trial} did not produce fuzzer_stats."
               exit 1
             fi
 
             if ! [[ "$execs_done" =~ ^[0-9]+$ ]] || (( execs_done < 1 )); then
-              echo "::error::Trial ${trial} did not record any completed fuzzing executions."
+              echo "::error::Trial ${trial} recorded no completed executions."
               exit 1
             fi
 
             if (( make_status != 0 )); then
-              echo "::error::make run_python returned ${make_status} in trial ${trial}."
+              echo "::error::make run_python failed in trial ${trial}."
               exit 1
             fi
 
-            echo "Trial ${trial}: elapsed=${elapsed_seconds}s, execs_done=${execs_done}, execs_per_sec=${execs_per_sec}"
+            echo "Trial ${trial}: ${elapsed_seconds}s, executions=${execs_done}, execs/sec=${execs_per_sec}"
           done
 
       - name: Summarize baseline measurements
@@ -221,10 +225,13 @@ jobs:
         shell: bash
         run: |
           if [[ -f mvp/timings.csv ]]; then
-            echo "### Test 7 baseline timings" >> "$GITHUB_STEP_SUMMARY"
-            echo '```csv' >> "$GITHUB_STEP_SUMMARY"
-            cat mvp/timings.csv >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "### Test 7 baseline"
+              echo '```csv'
+              cat mvp/timings.csv
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+
             cat mvp/timings.csv
           else
             echo "No timing CSV was created." | tee -a "$GITHUB_STEP_SUMMARY"
