@@ -1,76 +1,75 @@
-
 name: Crypto Testing - Selectable LibOQS Tests
 
 on:
   workflow_dispatch:
     inputs:
       all_tests:
-        description: "Run all 13 test families if no individual test is selected"
+        description: "Run all 13 test families when no individual test is selected"
         required: false
         type: boolean
         default: true
       kem_decaps_c:
-        description: "Test 7 - KEM/Decaps/c"
+        description: "Test 7 - KEM/Decaps/c (mutated ciphertext)"
         required: false
         type: boolean
         default: false
       kem_decaps_sk:
-        description: "Test 6 - KEM/Decaps/sk"
+        description: "Test 6 - KEM/Decaps/sk (mutated secret key)"
         required: false
         type: boolean
         default: false
       kem_encaps_badrng:
-        description: "Test 5 - KEM/Encaps/badrng"
+        description: "Test 5 - KEM/Encaps/badrng (mutated randomness)"
         required: false
         type: boolean
         default: false
       kem_encaps_pk_0:
-        description: "Test 3 - KEM/Encaps/pk-0"
+        description: "Test 3 - KEM/Encaps/pk-0 (mutated public key, zero variant)"
         required: false
         type: boolean
         default: false
       kem_encaps_pk:
-        description: "Test 4 - KEM/Encaps/pk"
+        description: "Test 4 - KEM/Encaps/pk (mutated public key)"
         required: false
         type: boolean
         default: false
       kem_keygen_badrng:
-        description: "Test 2 - KEM/Keygen/badrng"
+        description: "Test 2 - KEM/Keygen/badrng (mutated randomness)"
         required: false
         type: boolean
         default: false
       sign_keygen_badrng:
-        description: "Test 2 - SIGN/Keygen/badrng"
+        description: "Test 2 - SIGN/Keygen/badrng (mutated randomness)"
         required: false
         type: boolean
         default: false
       sign_sign_badrng:
-        description: "Test 10 - SIGN/Sign/badrng"
+        description: "Test 10 - SIGN/Sign/badrng (mutated randomness)"
         required: false
         type: boolean
         default: false
       sign_sign_m:
-        description: "Test 9 - SIGN/Sign/m"
+        description: "Test 9 - SIGN/Sign/m (mutated message)"
         required: false
         type: boolean
         default: false
       sign_sign_sk:
-        description: "Test 8 - SIGN/Sign/sk"
+        description: "Test 8 - SIGN/Sign/sk (mutated secret key)"
         required: false
         type: boolean
         default: false
       sign_verify_m:
-        description: "Test 12 - SIGN/Verify/m"
+        description: "Test 12 - SIGN/Verify/m (mutated message)"
         required: false
         type: boolean
         default: false
       sign_verify_sig:
-        description: "Test 13 - SIGN/Verify/sig"
+        description: "Test 13 - SIGN/Verify/sig (mutated signature)"
         required: false
         type: boolean
         default: false
       sign_verify_pk:
-        description: "Test 11 - SIGN/Verify/pk"
+        description: "Test 11 - SIGN/Verify/pk (mutated public key)"
         required: false
         type: boolean
         default: false
@@ -207,6 +206,7 @@ jobs:
         run: |
           set -Eeuo pipefail
 
+          # Push-triggered runs execute all tests.
           if [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
             selected=("ALL")
           else
@@ -226,12 +226,12 @@ jobs:
             if [[ "${INPUT_SIGN_VERIFY_SIG,,}" == "true" ]]; then selected+=("SIGN/Verify/sig"); fi
             if [[ "${INPUT_SIGN_VERIFY_PK,,}" == "true" ]]; then selected+=("SIGN/Verify/pk"); fi
 
-            # Individual test selections take precedence over all_tests.
+            # Individual selections take precedence over all_tests.
             if ((${#selected[@]} == 0)); then
               if [[ "${INPUT_ALL_TESTS,,}" == "true" ]]; then
                 selected=("ALL")
               else
-                echo "::error::Select at least one test or enable all_tests."
+                echo "::error::Select at least one test or enable the all-tests option."
                 exit 1
               fi
             fi
@@ -255,13 +255,13 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          # Remove an unused import only in the temporary runner workspace.
+          # Remove this unused import only in the temporary runner workspace.
           # Maul.py is not modified.
           if [[ -f tech/paper_fuzzing/liboqs/serialize.py ]]; then
-            sed -i '/^from sympy import false$/d' tech/paper_fuzzing/liboqs/serialize.py
+            sed -i '/^from sympy import false$/d' \
+              tech/paper_fuzzing/liboqs/serialize.py
           fi
 
-          # Make runner-only AFL++ compatibility adjustments.
           python3 - <<'PY'
           from pathlib import Path
           import ast
@@ -278,12 +278,14 @@ jobs:
                   f"Expected 13 LibOQS test Makefiles, found {len(makefiles)}"
               )
 
+          # Remove AFL++ deterministic mode (-D), which is incompatible with
+          # AFL_CUSTOM_MUTATOR_ONLY=1 in this setup.
           for path in makefiles:
               text = path.read_text()
               matches = list(re.finditer(r"(?m)^FUZZCMD=.*$", text))
 
               if len(matches) != 1:
-                  sys.exit(f"Expected one FUZZCMD line in {path}")
+                  sys.exit(f"Expected exactly one FUZZCMD line in {path}")
 
               line = matches[0].group(0)
 
@@ -301,7 +303,7 @@ jobs:
               text = text[:matches[0].start()] + line + text[matches[0].end():]
               path.write_text(text)
 
-          # Ensure at least one worker is used on runners with few CPUs.
+          # Ensure the worker pool cannot become zero on runners with few CPUs.
           orchestrator = Path("fuzz_liboqs.py")
           source = orchestrator.read_text()
 
@@ -319,12 +321,12 @@ jobs:
                   "Could not find the expected worker-count expression in fuzz_liboqs.py"
               )
 
-          # Fix invalid escape warnings in the runner copy, not in the repository.
+          # Avoid invalid escape warnings in this runner copy of the script.
           source = source.replace(r"'\eD'", r"r'\eD'")
           orchestrator.write_text(source)
 
-          # TESTPATHS has one module-level definition and two conditional
-          # reassignments in the original source. Select only the module-level one.
+          # Locate the one module-level TESTPATHS definition.
+          # The original file also reassigns TESTPATHS inside conditional branches.
           tree = ast.parse(source)
           assignments = []
 
@@ -403,7 +405,7 @@ jobs:
           lines.insert(assignment.end_lineno, injected)
           orchestrator.write_text("".join(lines))
 
-          # Verify the patched file is valid Python and the filter is effective.
+          # Check that the generated Python remains syntactically valid.
           compile(orchestrator.read_text(), str(orchestrator), "exec")
 
           print(f"Patched {len(makefiles)} Makefiles in the runner workspace.")
@@ -420,6 +422,25 @@ jobs:
             --mutator python \
             --logfile "${LIBOQS_DIR}.log"
 
+      - name: Package fuzzing outputs for artifact upload
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          mapfile -d '' -t result_dirs < <(
+            find tech/paper_fuzzing/liboqs -type d -name 'aggr_*' -print0
+          )
+
+          if ((${#result_dirs[@]} > 0)); then
+            # AFL++ queue filenames can contain colons. Preserve them inside
+            # a tar.gz archive instead of uploading those paths individually.
+            tar -czf fuzzing-outputs.tar.gz -- "${result_dirs[@]}"
+            echo "Packaged ${#result_dirs[@]} aggregate output directories."
+          else
+            echo "No aggregate output directories were found."
+          fi
+
       - name: Upload fuzzing outputs and logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -427,6 +448,6 @@ jobs:
           name: crypto-testing-selected-liboqs-tests
           path: |
             cur_liboqs.log
-            tech/paper_fuzzing/liboqs/**/aggr_*
+            fuzzing-outputs.tar.gz
           if-no-files-found: warn
           retention-days: 14
