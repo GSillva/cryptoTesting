@@ -1,0 +1,425 @@
+
+name: Crypto Testing - Selectable LibOQS Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      all_tests:
+        description: "Run all 13 test families when no individual test is selected"
+        required: false
+        type: boolean
+        default: true
+      kem_decaps_c:
+        description: "Test 7 - KEM/Decaps/c (mutated ciphertext)"
+        required: false
+        type: boolean
+        default: false
+      kem_decaps_sk:
+        description: "Test 6 - KEM/Decaps/sk (mutated secret key)"
+        required: false
+        type: boolean
+        default: false
+      kem_encaps_badrng:
+        description: "Test 5 - KEM/Encaps/badrng (mutated randomness)"
+        required: false
+        type: boolean
+        default: false
+      kem_encaps_pk_0:
+        description: "Test 3 - KEM/Encaps/pk-0 (mutated public key, zero variant)"
+        required: false
+        type: boolean
+        default: false
+      kem_encaps_pk:
+        description: "Test 4 - KEM/Encaps/pk (mutated public key)"
+        required: false
+        type: boolean
+        default: false
+      kem_keygen_badrng:
+        description: "Test 2 - KEM/Keygen/badrng (mutated randomness)"
+        required: false
+        type: boolean
+        default: false
+      sign_keygen_badrng:
+        description: "Test 2 - SIGN/Keygen/badrng (mutated randomness)"
+        required: false
+        type: boolean
+        default: false
+      sign_sign_badrng:
+        description: "Test 10 - SIGN/Sign/badrng (mutated randomness)"
+        required: false
+        type: boolean
+        default: false
+      sign_sign_m:
+        description: "Test 9 - SIGN/Sign/m (mutated message)"
+        required: false
+        type: boolean
+        default: false
+      sign_sign_sk:
+        description: "Test 8 - SIGN/Sign/sk (mutated secret key)"
+        required: false
+        type: boolean
+        default: false
+      sign_verify_m:
+        description: "Test 12 - SIGN/Verify/m (mutated message)"
+        required: false
+        type: boolean
+        default: false
+      sign_verify_sig:
+        description: "Test 13 - SIGN/Verify/sig (mutated signature)"
+        required: false
+        type: boolean
+        default: false
+      sign_verify_pk:
+        description: "Test 11 - SIGN/Verify/pk (mutated public key)"
+        required: false
+        type: boolean
+        default: false
+
+  # Pushes run all 13 test families automatically.
+  # Use Run workflow in Actions to select specific tests.
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/crypto_testing_selectable.yml"
+      - "Makefile"
+      - "fuzz_liboqs.py"
+      - "tech/paper_fuzzing/liboqs/**"
+      - "tech/paper_fuzzing/utilities/**"
+
+permissions:
+  contents: read
+
+jobs:
+  liboqs-tests:
+    name: Selectable LibOQS fuzzing tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    env:
+      LIBOQS_DIR: cur_liboqs
+      AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES: "1"
+      AFL_SKIP_CPUFREQ: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build and runtime dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            afl++ \
+            build-essential \
+            clang \
+            cmake \
+            git \
+            libssl-dev \
+            ninja-build \
+            python3 \
+            python3-bitarray \
+            python3-cffi \
+            python3-dev \
+            python3-psutil \
+            python3-tqdm
+
+          python3 - <<'PY'
+          import bitarray
+          import cffi
+          import psutil
+          import tqdm
+
+          print("cffi:", cffi.__version__)
+          print("bitarray:", bitarray.__version__)
+          print("psutil:", psutil.__version__)
+          print("tqdm:", tqdm.__version__)
+          PY
+
+          echo "python=$(python3 --version 2>&1)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "afl_fuzz=$(command -v afl-fuzz)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Prepare AFL++ compatibility paths
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if command -v afl-clang-fast >/dev/null 2>&1; then
+            AFL_CC="$(command -v afl-clang-fast)"
+          elif command -v afl-clang >/dev/null 2>&1; then
+            AFL_CC="$(command -v afl-clang)"
+          elif command -v afl-cc >/dev/null 2>&1; then
+            AFL_CC="$(command -v afl-cc)"
+          else
+            echo "::error::No AFL++ compiler wrapper was found."
+            exit 1
+          fi
+
+          AFL_FUZZ="$(command -v afl-fuzz)"
+          mkdir -p aflpp
+          ln -sfn "$AFL_CC" aflpp/afl-clang-fast
+          ln -sfn "$AFL_CC" aflpp/afl-clang
+          ln -sfn "$AFL_FUZZ" aflpp/afl-fuzz
+
+          {
+            echo "AFL compiler wrapper: $AFL_CC"
+            echo "AFL fuzzer: $AFL_FUZZ"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Build LibOQS 0.8.0
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git clone --depth 1 --branch 0.8.0 \
+            https://github.com/open-quantum-safe/liboqs.git "$LIBOQS_DIR"
+
+          cmake -S "$LIBOQS_DIR" -B "$LIBOQS_DIR/build" -GNinja \
+            -DOQS_BUILD_TESTS=OFF \
+            -DOQS_BUILD_EXAMPLES=OFF
+          cmake --build "$LIBOQS_DIR/build" --parallel 2
+
+          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/$LIBOQS_DIR/build/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+          {
+            echo "LibOQS tag: 0.8.0"
+            echo "LibOQS commit: $(git -C "$LIBOQS_DIR" rev-parse HEAD)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve selected tests
+        id: test-selection
+        shell: bash
+        env:
+          INPUT_ALL_TESTS: ${{ inputs.all_tests }}
+          INPUT_KEM_DECAPS_C: ${{ inputs.kem_decaps_c }}
+          INPUT_KEM_DECAPS_SK: ${{ inputs.kem_decaps_sk }}
+          INPUT_KEM_ENCAPS_BADRNG: ${{ inputs.kem_encaps_badrng }}
+          INPUT_KEM_ENCAPS_PK_0: ${{ inputs.kem_encaps_pk_0 }}
+          INPUT_KEM_ENCAPS_PK: ${{ inputs.kem_encaps_pk }}
+          INPUT_KEM_KEYGEN_BADRNG: ${{ inputs.kem_keygen_badrng }}
+          INPUT_SIGN_KEYGEN_BADRNG: ${{ inputs.sign_keygen_badrng }}
+          INPUT_SIGN_SIGN_BADRNG: ${{ inputs.sign_sign_badrng }}
+          INPUT_SIGN_SIGN_M: ${{ inputs.sign_sign_m }}
+          INPUT_SIGN_SIGN_SK: ${{ inputs.sign_sign_sk }}
+          INPUT_SIGN_VERIFY_M: ${{ inputs.sign_verify_m }}
+          INPUT_SIGN_VERIFY_SIG: ${{ inputs.sign_verify_sig }}
+          INPUT_SIGN_VERIFY_PK: ${{ inputs.sign_verify_pk }}
+        run: |
+          set -Eeuo pipefail
+
+          # Push-triggered runs execute everything. Manual runs use checkboxes.
+          if [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+            selected=("ALL")
+          else
+            selected=()
+
+            if [[ "${INPUT_KEM_DECAPS_C,,}" == "true" ]]; then selected+=("KEM/Decaps/c"); fi
+            if [[ "${INPUT_KEM_DECAPS_SK,,}" == "true" ]]; then selected+=("KEM/Decaps/sk"); fi
+            if [[ "${INPUT_KEM_ENCAPS_BADRNG,,}" == "true" ]]; then selected+=("KEM/Encaps/badrng"); fi
+            if [[ "${INPUT_KEM_ENCAPS_PK_0,,}" == "true" ]]; then selected+=("KEM/Encaps/pk-0"); fi
+            if [[ "${INPUT_KEM_ENCAPS_PK,,}" == "true" ]]; then selected+=("KEM/Encaps/pk"); fi
+            if [[ "${INPUT_KEM_KEYGEN_BADRNG,,}" == "true" ]]; then selected+=("KEM/Keygen/badrng"); fi
+            if [[ "${INPUT_SIGN_KEYGEN_BADRNG,,}" == "true" ]]; then selected+=("SIGN/Keygen/badrng"); fi
+            if [[ "${INPUT_SIGN_SIGN_BADRNG,,}" == "true" ]]; then selected+=("SIGN/Sign/badrng"); fi
+            if [[ "${INPUT_SIGN_SIGN_M,,}" == "true" ]]; then selected+=("SIGN/Sign/m"); fi
+            if [[ "${INPUT_SIGN_SIGN_SK,,}" == "true" ]]; then selected+=("SIGN/Sign/sk"); fi
+            if [[ "${INPUT_SIGN_VERIFY_M,,}" == "true" ]]; then selected+=("SIGN/Verify/m"); fi
+            if [[ "${INPUT_SIGN_VERIFY_SIG,,}" == "true" ]]; then selected+=("SIGN/Verify/sig"); fi
+            if [[ "${INPUT_SIGN_VERIFY_PK,,}" == "true" ]]; then selected+=("SIGN/Verify/pk"); fi
+
+            # Any individual selection takes precedence over all_tests.
+            if ((${#selected[@]} == 0)); then
+              if [[ "${INPUT_ALL_TESTS,,}" == "true" ]]; then
+                selected=("ALL")
+              else
+                echo "::error::Select at least one test or enable the all-tests option."
+                exit 1
+              fi
+            fi
+          fi
+
+          selected_csv="$(IFS=,; echo "${selected[*]}")"
+          echo "CI_SELECTED_TESTS=$selected_csv" >> "$GITHUB_ENV"
+
+          {
+            echo "### Selected LibOQS tests"
+            for test in "${selected[@]}"; do
+              printf -- '- `%s`\n' "$test"
+            done
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "Selected tests: $selected_csv"
+
+      - name: Apply runner-only compatibility adjustments
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          # Remove only this unused import from the temporary runner workspace.
+          # Maul.py is not modified.
+          if [[ -f tech/paper_fuzzing/liboqs/serialize.py ]]; then
+            sed -i '/^from sympy import false$/d' \
+              tech/paper_fuzzing/liboqs/serialize.py
+          fi
+
+          # Current AFL++ rejects deterministic mode (-D) in this configuration.
+          # Patch only the temporary copies of the test Makefiles.
+          python3 - <<'PY'
+          from pathlib import Path
+          import ast
+          import re
+          import sys
+
+          makefiles = sorted(
+              list(Path("tech/paper_fuzzing/liboqs/KEM").rglob("Makefile"))
+              + list(Path("tech/paper_fuzzing/liboqs/SIGN").rglob("Makefile"))
+          )
+
+          if len(makefiles) != 13:
+              print(
+                  f"Expected 13 LibOQS test Makefiles, found {len(makefiles)}",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          for path in makefiles:
+              text = path.read_text()
+              matches = list(re.finditer(r"(?m)^FUZZCMD=.*$", text))
+
+              if len(matches) != 1:
+                  print(f"Expected exactly one FUZZCMD line in {path}", file=sys.stderr)
+                  sys.exit(1)
+
+              line = matches[0].group(0)
+
+              if "$(AFLFUZZ)" not in line or "Match.afl.out" not in line:
+                  print(f"Unexpected FUZZCMD format in {path}: {line}", file=sys.stderr)
+                  sys.exit(1)
+
+              line = re.sub(r"(?<!\S)-D(?=\s)", "", line)
+              line = line.replace(
+                  "FUZZCMD=",
+                  "FUZZCMD=env -u AFL_EXIT_WHEN_DONE -u AFL_EXIT_ON_TIME "
+                  "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 ",
+                  1,
+              )
+
+              text = (
+                  text[:matches[0].start()]
+                  + line
+                  + text[matches[0].end():]
+              )
+              path.write_text(text)
+
+          # Prevent a zero-sized worker pool on runners with few CPUs.
+          orchestrator = Path("fuzz_liboqs.py")
+          source = orchestrator.read_text()
+
+          pattern = re.compile(
+              r"(?m)^(\s*)nproc\s*=\s*int\(0\.8\s*\*\s*psutil\.cpu_count\(logical=False\)\)\s*-\s*1\s*$"
+          )
+
+          source, count = pattern.subn(
+              r"\1nproc = max(1, int(0.8 * (psutil.cpu_count(logical=True) or 1)) - 1)",
+              source,
+          )
+
+          if count != 1:
+              print(
+                  "Could not find the expected worker-count expression in fuzz_liboqs.py",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          # Insert a runner-only selector after the TESTPATHS assignment.
+          # This supports both repository-relative and liboqs-relative paths.
+          tree = ast.parse(source)
+          assignments = []
+
+          for node in ast.walk(tree):
+              if isinstance(node, ast.Assign) and any(
+                  isinstance(target, ast.Name) and target.id == "TESTPATHS"
+                  for target in node.targets
+              ):
+                  assignments.append(node)
+              elif (
+                  isinstance(node, ast.AnnAssign)
+                  and isinstance(node.target, ast.Name)
+                  and node.target.id == "TESTPATHS"
+              ):
+                  assignments.append(node)
+
+          if len(assignments) != 1 or assignments[0].col_offset != 0:
+              print(
+                  "Could not uniquely locate the top-level TESTPATHS assignment",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          assignment = assignments[0]
+
+          injected = ''' 
+          # START GitHub Actions test selector (runner workspace only)
+          import os as _ci_os
+          _ci_selected_test_suffixes = [
+              item for item in _ci_os.environ.get("CI_SELECTED_TESTS", "ALL").split(",")
+              if item
+          ]
+
+          def _ci_normalize_test_path(value):
+              return str(value).replace("\\\\", "/").rstrip("/")
+
+          def _ci_matches_test_path(value, suffix):
+              normalized = _ci_normalize_test_path(value)
+              return normalized == suffix or normalized.endswith("/" + suffix)
+
+          if _ci_selected_test_suffixes != ["ALL"]:
+              _ci_missing_test_suffixes = [
+                  suffix for suffix in _ci_selected_test_suffixes
+                  if not any(_ci_matches_test_path(path, suffix) for path in TESTPATHS)
+              ]
+              if _ci_missing_test_suffixes:
+                  raise RuntimeError(
+                      "Unknown test selection(s): " + ", ".join(_ci_missing_test_suffixes)
+                  )
+
+              TESTPATHS = [
+                  path for path in TESTPATHS
+                  if any(
+                      _ci_matches_test_path(path, suffix)
+                      for suffix in _ci_selected_test_suffixes
+                  )
+              ]
+
+          print("GitHub Actions selected TESTPATHS:", TESTPATHS)
+          # END GitHub Actions test selector
+          '''
+
+          lines = source.splitlines(keepends=True)
+          lines.insert(assignment.end_lineno, injected)
+          orchestrator.write_text("".join(lines))
+
+          print(f"Patched {len(makefiles)} Makefiles in the runner workspace.")
+          print("Maul.py remains unchanged.")
+          PY
+
+      - name: Run selected LibOQS test families
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 fuzz_liboqs.py \
+            --liboqs "$LIBOQS_DIR" \
+            --mutator python \
+            --logfile "${LIBOQS_DIR}.log"
+
+      - name: Upload fuzzing outputs and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-testing-selected-liboqs-tests
+          path: |
+            cur_liboqs.log
+            tech/paper_fuzzing/liboqs/**/aggr_*
+          if-no-files-found: warn
+          retention-days: 14
