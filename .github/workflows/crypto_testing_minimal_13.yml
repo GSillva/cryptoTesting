@@ -5,74 +5,74 @@ on:
   workflow_dispatch:
     inputs:
       all_tests:
-        description: "Run all 13 tests if no individual test is selected"
+        description: "Run all 13 test families if no individual test is selected"
         required: false
         type: boolean
         default: true
       kem_decaps_c:
         description: "Test 7 - KEM/Decaps/c"
-        type: boolean
         required: false
+        type: boolean
         default: false
       kem_decaps_sk:
         description: "Test 6 - KEM/Decaps/sk"
-        type: boolean
         required: false
+        type: boolean
         default: false
       kem_encaps_badrng:
         description: "Test 5 - KEM/Encaps/badrng"
-        type: boolean
         required: false
+        type: boolean
         default: false
       kem_encaps_pk_0:
         description: "Test 3 - KEM/Encaps/pk-0"
-        type: boolean
         required: false
+        type: boolean
         default: false
       kem_encaps_pk:
         description: "Test 4 - KEM/Encaps/pk"
-        type: boolean
         required: false
+        type: boolean
         default: false
       kem_keygen_badrng:
         description: "Test 2 - KEM/Keygen/badrng"
-        type: boolean
         required: false
+        type: boolean
         default: false
       sign_keygen_badrng:
         description: "Test 2 - SIGN/Keygen/badrng"
-        type: boolean
         required: false
+        type: boolean
         default: false
       sign_sign_badrng:
         description: "Test 10 - SIGN/Sign/badrng"
-        type: boolean
         required: false
+        type: boolean
         default: false
       sign_sign_m:
         description: "Test 9 - SIGN/Sign/m"
-        type: boolean
         required: false
+        type: boolean
         default: false
       sign_sign_sk:
         description: "Test 8 - SIGN/Sign/sk"
-        type: boolean
         required: false
+        type: boolean
         default: false
       sign_verify_m:
         description: "Test 12 - SIGN/Verify/m"
-        type: boolean
         required: false
+        type: boolean
         default: false
       sign_verify_sig:
         description: "Test 13 - SIGN/Verify/sig"
-        type: boolean
         required: false
+        type: boolean
         default: false
       sign_verify_pk:
         description: "Test 11 - SIGN/Verify/pk"
-        type: boolean
         required: false
+        type: boolean
         default: false
 
   push:
@@ -90,7 +90,7 @@ permissions:
 
 jobs:
   liboqs-tests:
-    name: Selected LibOQS fuzzing tests
+    name: Selectable LibOQS fuzzing tests
     runs-on: ubuntu-24.04
     timeout-minutes: 360
 
@@ -103,7 +103,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install build and runtime dependencies
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -123,6 +123,21 @@ jobs:
             python3-psutil \
             python3-tqdm
 
+          python3 - <<'PY'
+          import bitarray
+          import cffi
+          import psutil
+          import tqdm
+
+          print("cffi:", cffi.__version__)
+          print("bitarray:", bitarray.__version__)
+          print("psutil:", psutil.__version__)
+          print("tqdm:", tqdm.__version__)
+          PY
+
+          echo "python=$(python3 --version 2>&1)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "afl_fuzz=$(command -v afl-fuzz)" | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Prepare AFL++ compatibility paths
         shell: bash
         run: |
@@ -135,7 +150,7 @@ jobs:
           elif command -v afl-cc >/dev/null 2>&1; then
             AFL_CC="$(command -v afl-cc)"
           else
-            echo "::error::AFL++ compiler wrapper not found"
+            echo "::error::No AFL++ compiler wrapper was found."
             exit 1
           fi
 
@@ -144,6 +159,11 @@ jobs:
           ln -sfn "$AFL_CC" aflpp/afl-clang-fast
           ln -sfn "$AFL_CC" aflpp/afl-clang
           ln -sfn "$AFL_FUZZ" aflpp/afl-fuzz
+
+          {
+            echo "AFL compiler wrapper: $AFL_CC"
+            echo "AFL fuzzer: $AFL_FUZZ"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Build LibOQS 0.8.0
         shell: bash
@@ -161,77 +181,90 @@ jobs:
 
           echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/$LIBOQS_DIR/build/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
 
+          {
+            echo "LibOQS tag: 0.8.0"
+            echo "LibOQS commit: $(git -C "$LIBOQS_DIR" rev-parse HEAD)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Resolve selected tests
+        id: test-selection
         shell: bash
         env:
-          ALL_TESTS: ${{ inputs.all_tests }}
-          KEM_DECAPS_C: ${{ inputs.kem_decaps_c }}
-          KEM_DECAPS_SK: ${{ inputs.kem_decaps_sk }}
-          KEM_ENCAPS_BADRNG: ${{ inputs.kem_encaps_badrng }}
-          KEM_ENCAPS_PK_0: ${{ inputs.kem_encaps_pk_0 }}
-          KEM_ENCAPS_PK: ${{ inputs.kem_encaps_pk }}
-          KEM_KEYGEN_BADRNG: ${{ inputs.kem_keygen_badrng }}
-          SIGN_KEYGEN_BADRNG: ${{ inputs.sign_keygen_badrng }}
-          SIGN_SIGN_BADRNG: ${{ inputs.sign_sign_badrng }}
-          SIGN_SIGN_M: ${{ inputs.sign_sign_m }}
-          SIGN_SIGN_SK: ${{ inputs.sign_sign_sk }}
-          SIGN_VERIFY_M: ${{ inputs.sign_verify_m }}
-          SIGN_VERIFY_SIG: ${{ inputs.sign_verify_sig }}
-          SIGN_VERIFY_PK: ${{ inputs.sign_verify_pk }}
+          INPUT_ALL_TESTS: ${{ inputs.all_tests }}
+          INPUT_KEM_DECAPS_C: ${{ inputs.kem_decaps_c }}
+          INPUT_KEM_DECAPS_SK: ${{ inputs.kem_decaps_sk }}
+          INPUT_KEM_ENCAPS_BADRNG: ${{ inputs.kem_encaps_badrng }}
+          INPUT_KEM_ENCAPS_PK_0: ${{ inputs.kem_encaps_pk_0 }}
+          INPUT_KEM_ENCAPS_PK: ${{ inputs.kem_encaps_pk }}
+          INPUT_KEM_KEYGEN_BADRNG: ${{ inputs.kem_keygen_badrng }}
+          INPUT_SIGN_KEYGEN_BADRNG: ${{ inputs.sign_keygen_badrng }}
+          INPUT_SIGN_SIGN_BADRNG: ${{ inputs.sign_sign_badrng }}
+          INPUT_SIGN_SIGN_M: ${{ inputs.sign_sign_m }}
+          INPUT_SIGN_SIGN_SK: ${{ inputs.sign_sign_sk }}
+          INPUT_SIGN_VERIFY_M: ${{ inputs.sign_verify_m }}
+          INPUT_SIGN_VERIFY_SIG: ${{ inputs.sign_verify_sig }}
+          INPUT_SIGN_VERIFY_PK: ${{ inputs.sign_verify_pk }}
         run: |
           set -Eeuo pipefail
-
-          selected=()
 
           if [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
             selected=("ALL")
           else
-            [[ "${KEM_DECAPS_C,,}" == "true" ]] && selected+=("KEM/Decaps/c")
-            [[ "${KEM_DECAPS_SK,,}" == "true" ]] && selected+=("KEM/Decaps/sk")
-            [[ "${KEM_ENCAPS_BADRNG,,}" == "true" ]] && selected+=("KEM/Encaps/badrng")
-            [[ "${KEM_ENCAPS_PK_0,,}" == "true" ]] && selected+=("KEM/Encaps/pk-0")
-            [[ "${KEM_ENCAPS_PK,,}" == "true" ]] && selected+=("KEM/Encaps/pk")
-            [[ "${KEM_KEYGEN_BADRNG,,}" == "true" ]] && selected+=("KEM/Keygen/badrng")
-            [[ "${SIGN_KEYGEN_BADRNG,,}" == "true" ]] && selected+=("SIGN/Keygen/badrng")
-            [[ "${SIGN_SIGN_BADRNG,,}" == "true" ]] && selected+=("SIGN/Sign/badrng")
-            [[ "${SIGN_SIGN_M,,}" == "true" ]] && selected+=("SIGN/Sign/m")
-            [[ "${SIGN_SIGN_SK,,}" == "true" ]] && selected+=("SIGN/Sign/sk")
-            [[ "${SIGN_VERIFY_M,,}" == "true" ]] && selected+=("SIGN/Verify/m")
-            [[ "${SIGN_VERIFY_SIG,,}" == "true" ]] && selected+=("SIGN/Verify/sig")
-            [[ "${SIGN_VERIFY_PK,,}" == "true" ]] && selected+=("SIGN/Verify/pk")
+            selected=()
 
+            if [[ "${INPUT_KEM_DECAPS_C,,}" == "true" ]]; then selected+=("KEM/Decaps/c"); fi
+            if [[ "${INPUT_KEM_DECAPS_SK,,}" == "true" ]]; then selected+=("KEM/Decaps/sk"); fi
+            if [[ "${INPUT_KEM_ENCAPS_BADRNG,,}" == "true" ]]; then selected+=("KEM/Encaps/badrng"); fi
+            if [[ "${INPUT_KEM_ENCAPS_PK_0,,}" == "true" ]]; then selected+=("KEM/Encaps/pk-0"); fi
+            if [[ "${INPUT_KEM_ENCAPS_PK,,}" == "true" ]]; then selected+=("KEM/Encaps/pk"); fi
+            if [[ "${INPUT_KEM_KEYGEN_BADRNG,,}" == "true" ]]; then selected+=("KEM/Keygen/badrng"); fi
+            if [[ "${INPUT_SIGN_KEYGEN_BADRNG,,}" == "true" ]]; then selected+=("SIGN/Keygen/badrng"); fi
+            if [[ "${INPUT_SIGN_SIGN_BADRNG,,}" == "true" ]]; then selected+=("SIGN/Sign/badrng"); fi
+            if [[ "${INPUT_SIGN_SIGN_M,,}" == "true" ]]; then selected+=("SIGN/Sign/m"); fi
+            if [[ "${INPUT_SIGN_SIGN_SK,,}" == "true" ]]; then selected+=("SIGN/Sign/sk"); fi
+            if [[ "${INPUT_SIGN_VERIFY_M,,}" == "true" ]]; then selected+=("SIGN/Verify/m"); fi
+            if [[ "${INPUT_SIGN_VERIFY_SIG,,}" == "true" ]]; then selected+=("SIGN/Verify/sig"); fi
+            if [[ "${INPUT_SIGN_VERIFY_PK,,}" == "true" ]]; then selected+=("SIGN/Verify/pk"); fi
+
+            # Individual test selections take precedence over all_tests.
             if ((${#selected[@]} == 0)); then
-              if [[ "${ALL_TESTS,,}" == "true" ]]; then
+              if [[ "${INPUT_ALL_TESTS,,}" == "true" ]]; then
                 selected=("ALL")
               else
-                echo "::error::Select at least one test or enable all_tests"
+                echo "::error::Select at least one test or enable all_tests."
                 exit 1
               fi
             fi
           fi
 
-          selection="$(IFS=,; echo "${selected[*]}")"
-          echo "CI_SELECTED_TESTS=$selection" >> "$GITHUB_ENV"
+          selected_csv="$(IFS=,; echo "${selected[*]}")"
+          echo "CI_SELECTED_TESTS=$selected_csv" >> "$GITHUB_ENV"
 
           {
-            echo "### Selected tests"
-            printf -- '- `%s`\n' "${selected[@]}"
+            echo "### Selected LibOQS tests"
+            for test in "${selected[@]}"; do
+              printf -- '- `%s`\n' "$test"
+            done
+            echo
           } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "Selected tests: $selected_csv"
 
       - name: Apply runner-only compatibility adjustments
         shell: bash
         run: |
           set -Eeuo pipefail
 
-          # Remove an unused import in the runner workspace only.
+          # Remove an unused import only in the temporary runner workspace.
+          # Maul.py is not modified.
           if [[ -f tech/paper_fuzzing/liboqs/serialize.py ]]; then
-            sed -i '/^from sympy import false$/d' \
-              tech/paper_fuzzing/liboqs/serialize.py
+            sed -i '/^from sympy import false$/d' tech/paper_fuzzing/liboqs/serialize.py
           fi
 
-          # Adjust the AFL++ command in the temporary Makefiles.
+          # Make runner-only AFL++ compatibility adjustments.
           python3 - <<'PY'
           from pathlib import Path
+          import ast
           import re
           import sys
 
@@ -241,130 +274,157 @@ jobs:
           )
 
           if len(makefiles) != 13:
-              sys.exit(f"Expected 13 test Makefiles; found {len(makefiles)}")
+              sys.exit(
+                  f"Expected 13 LibOQS test Makefiles, found {len(makefiles)}"
+              )
 
           for path in makefiles:
-              source = path.read_text()
-              lines = source.splitlines()
-              indexes = [
-                  i for i, line in enumerate(lines)
-                  if line.startswith("FUZZCMD=")
-              ]
+              text = path.read_text()
+              matches = list(re.finditer(r"(?m)^FUZZCMD=.*$", text))
 
-              if len(indexes) != 1:
+              if len(matches) != 1:
                   sys.exit(f"Expected one FUZZCMD line in {path}")
 
-              i = indexes[0]
-              line = re.sub(r"(?<!\S)-D(?=\s)", "", lines[i])
+              line = matches[0].group(0)
+
+              if "$(AFLFUZZ)" not in line or "Match.afl.out" not in line:
+                  sys.exit(f"Unexpected FUZZCMD format in {path}: {line}")
+
+              line = re.sub(r"(?<!\S)-D(?=\s)", "", line)
               line = line.replace(
                   "FUZZCMD=",
                   "FUZZCMD=env -u AFL_EXIT_WHEN_DONE -u AFL_EXIT_ON_TIME "
                   "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 ",
                   1,
               )
-              lines[i] = line
-              path.write_text("\n".join(lines) + "\n")
 
-          # Guarantee at least one worker.
-          path = Path("fuzz_liboqs.py")
-          source = path.read_text()
-          old = "nproc = int(0.8 * psutil.cpu_count(logical=False)) - 1"
-          new = "nproc = max(1, int(0.8 * (psutil.cpu_count(logical=True) or 1)) - 1)"
+              text = text[:matches[0].start()] + line + text[matches[0].end():]
+              path.write_text(text)
 
-          if old in source:
-              source = source.replace(old, new, 1)
-              path.write_text(source)
+          # Ensure at least one worker is used on runners with few CPUs.
+          orchestrator = Path("fuzz_liboqs.py")
+          source = orchestrator.read_text()
 
-          # Safely find the TESTPATHS assignment, including indented assignments.
-          # Do not assume it is at the top level.
-          import ast
+          pattern = re.compile(
+              r"(?m)^(\s*)nproc\s*=\s*int\(0\.8\s*\*\s*psutil\.cpu_count\(logical=False\)\)\s*-\s*1\s*$"
+          )
 
+          source, count = pattern.subn(
+              r"\1nproc = max(1, int(0.8 * (psutil.cpu_count(logical=True) or 1)) - 1)",
+              source,
+          )
+
+          if count != 1:
+              sys.exit(
+                  "Could not find the expected worker-count expression in fuzz_liboqs.py"
+              )
+
+          # Fix invalid escape warnings in the runner copy, not in the repository.
+          source = source.replace(r"'\eD'", r"r'\eD'")
+          orchestrator.write_text(source)
+
+          # TESTPATHS has one module-level definition and two conditional
+          # reassignments in the original source. Select only the module-level one.
           tree = ast.parse(source)
           assignments = []
 
           for node in ast.walk(tree):
-              targets = []
-              if isinstance(node, ast.Assign):
-                  targets = node.targets
-              elif isinstance(node, ast.AnnAssign):
-                  targets = [node.target]
-
-              if any(
+              if isinstance(node, ast.Assign) and any(
                   isinstance(target, ast.Name) and target.id == "TESTPATHS"
-                  for target in targets
+                  for target in node.targets
+              ):
+                  assignments.append(node)
+              elif (
+                  isinstance(node, ast.AnnAssign)
+                  and isinstance(node.target, ast.Name)
+                  and node.target.id == "TESTPATHS"
               ):
                   assignments.append(node)
 
-          if len(assignments) != 1:
-              sys.exit(
-                  f"Expected exactly one TESTPATHS assignment; found {len(assignments)}"
-              )
-
-          node = assignments[0]
-          if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-              sys.exit("Unsupported TESTPATHS assignment")
-
-          print(
-              f"Located TESTPATHS at lines "
-              f"{node.lineno}-{getattr(node, 'end_lineno', node.lineno)}"
-          )
-
-          # Replace the assigned list expression with a filtered expression.
-          # Keep the original list intact and evaluate its elements normally.
-          start_line = node.lineno - 1
-          end_line = getattr(node, "end_lineno", node.lineno)
-          lines = source.splitlines()
-
-          original = "\n".join(lines[start_line:end_line])
-          if "TESTPATHS" not in original:
-              sys.exit("Unexpected TESTPATHS assignment")
-
-          # Insert filtering code immediately after the assignment.
-          injection = [
-              "",
-              "# CI test selection; runner workspace only.",
-              "import os as _ci_os",
-              "_ci_selected = [",
-              "    item for item in _ci_os.environ.get('CI_SELECTED_TESTS', 'ALL').split(',')",
-              "    if item",
-              "]",
-              "if _ci_selected != ['ALL']:",
-              "    def _ci_norm(value):",
-              "        return str(value).replace(chr(92), '/').rstrip('/')",
-              "    def _ci_match(value, suffix):",
-              "        value = _ci_norm(value)",
-              "        return value == suffix or value.endswith('/' + suffix)",
-              "    _ci_missing = [",
-              "        suffix for suffix in _ci_selected",
-              "        if not any(_ci_match(path, suffix) for path in TESTPATHS)",
-              "    ]",
-              "    if _ci_missing:",
-              "        raise RuntimeError('Unknown test selection(s): ' + ', '.join(_ci_missing))",
-              "    TESTPATHS = [",
-              "        path for path in TESTPATHS",
-              "        if any(_ci_match(path, suffix) for suffix in _ci_selected)",
-              "    ]",
-              "print('Selected TESTPATHS:', TESTPATHS)",
+          top_level_assignments = [
+              node for node in assignments if node.col_offset == 0
           ]
 
-          lines[end_line:end_line] = injection
-          path.write_text("\n".join(lines) + "\n")
+          if len(top_level_assignments) != 1:
+              sys.exit(
+                  f"Expected one module-level TESTPATHS definition, found "
+                  f"{len(top_level_assignments)}; all matching assignments: "
+                  f"{len(assignments)}"
+              )
+
+          assignment = top_level_assignments[0]
+
+          injected = '''
+          # START GitHub Actions test selector (runner workspace only)
+          import os as _ci_os
+
+          _ci_selected_test_suffixes = [
+              item
+              for item in _ci_os.environ.get("CI_SELECTED_TESTS", "ALL").split(",")
+              if item
+          ]
+
+          def _ci_normalize_test_path(value):
+              return str(value).replace(chr(92), "/").rstrip("/")
+
+          def _ci_matches_test_path(value, suffix):
+              normalized = _ci_normalize_test_path(value)
+              return normalized == suffix or normalized.endswith("/" + suffix)
+
+          if _ci_selected_test_suffixes != ["ALL"]:
+              _ci_missing_test_suffixes = [
+                  suffix
+                  for suffix in _ci_selected_test_suffixes
+                  if not any(
+                      _ci_matches_test_path(path, suffix) for path in TESTPATHS
+                  )
+              ]
+
+              if _ci_missing_test_suffixes:
+                  raise RuntimeError(
+                      "Unknown test selection(s): "
+                      + ", ".join(_ci_missing_test_suffixes)
+                  )
+
+              TESTPATHS = [
+                  path
+                  for path in TESTPATHS
+                  if any(
+                      _ci_matches_test_path(path, suffix)
+                      for suffix in _ci_selected_test_suffixes
+                  )
+              ]
+
+          print("GitHub Actions selected TESTPATHS:", TESTPATHS)
+          # END GitHub Actions test selector
+          '''
+
+          lines = source.splitlines(keepends=True)
+          lines.insert(assignment.end_lineno, injected)
+          orchestrator.write_text("".join(lines))
+
+          # Verify the patched file is valid Python and the filter is effective.
+          compile(orchestrator.read_text(), str(orchestrator), "exec")
+
+          print(f"Patched {len(makefiles)} Makefiles in the runner workspace.")
+          print("Maul.py remains unchanged.")
           PY
 
-      - name: Run selected tests
+      - name: Run selected LibOQS test families
         shell: bash
         run: |
           set -Eeuo pipefail
+
           python3 fuzz_liboqs.py \
             --liboqs "$LIBOQS_DIR" \
             --mutator python \
             --logfile "${LIBOQS_DIR}.log"
 
-      - name: Upload logs and results
+      - name: Upload fuzzing outputs and logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: crypto-testing-selected-results
+          name: crypto-testing-selected-liboqs-tests
           path: |
             cur_liboqs.log
             tech/paper_fuzzing/liboqs/**/aggr_*
